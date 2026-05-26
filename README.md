@@ -44,12 +44,27 @@ pip install -e .
 uv sync --extra full
 ```
 
-Copy `.env.example` to `.env` and fill in:
+Copy `.env.example` to `.env` and fill it in.
 
-```env
-OPENROUTER_API_KEY=sk-or-...
-PARALLEL_API_KEY=...
-```
+### Running 100% For Free (or Low Cost)
+
+Mimeo can run entirely for free using free-tier keys or local offline models:
+
+1. **LLM (Frontier Model)**:
+   - **Google AI Studio (Gemini)**: Get a free key at [Google AI Studio](https://aistudio.google.com/). Gemini 2.5 Flash is highly capable, fast, and has a generous free tier. Set `GEMINI_API_KEY=...` in your `.env`.
+   - **Ollama (Local LLM)**: Install [Ollama](https://ollama.com/) and run models like `llama3` locally. Set `MIMEO_LLM_PROVIDER=ollama`. No API key required!
+   - **OpenRouter Free Tier**: Sign up for a free account at [OpenRouter](https://openrouter.ai/) and get a key. Set `MIMEO_MODEL=google/gemini-2.5-flash:free`.
+
+2. **Search & Discovery**:
+   - **Tavily Search**: Get a free key (1,000 queries/month free) at [Tavily](https://tavily.com/). Set `TAVILY_API_KEY=...` in your `.env`.
+   - **DuckDuckGo Search**: If you do not provide `TAVILY_API_KEY` or `PARALLEL_API_KEY`, Mimeo automatically falls back to DuckDuckGo search (zero-config, 100% free, keyless).
+
+3. **Web Extraction**:
+   - Web pages are fetched and cleaned locally via the built-in `trafilatura` library (free).
+   - If local scraping gets blocked, Mimeo automatically falls back to fetching clean page text via the free **Jina Reader API** (`https://r.jina.ai/`) without needing a key.
+
+4. **Avatars**:
+   - If you skip automated avatar generation (due to no OpenRouter key), Mimeo will write the optimized painterly description to `output/<expert-name>/avatar_prompt.txt` so you can generate the avatar for free using external tools like Bing Image Creator/DALL-E 3 or Midjourney.
 
 ## Usage
 
@@ -67,7 +82,8 @@ Flags:
 | `--deep-research` | off | Additionally run a Parallel Task API deep-research run and inject its report as a pseudo-source. |
 | `--disambiguator TEXT` / `-d` | auto | Short qualifier that pins a common name to the right person (e.g. `"co-founder of AngelList, investor"`). When set, skips the automatic disambiguation pre-flight. |
 | `--assume-unambiguous` | off | Skip the disambiguation pre-flight entirely. Useful in non-interactive scripts where you're confident the name is unique. |
-| `--model SLUG` | `google/gemini-3.1-pro-preview` | Any OpenRouter model slug. |
+| `--model SLUG` | `google/gemini-3.1-pro-preview` | Any OpenRouter, Gemini, OpenAI, or Ollama model slug. |
+| `--provider {auto,openrouter,gemini,openai,ollama}` / `-p` | `auto` | LLM provider. Auto-detects based on keys in `.env` if not specified. |
 | `--output-dir PATH` | `./output` | Where the generated skill lands. |
 | `--refresh` | off | Ignore cached intermediates in `_workspace/` and re-run everything. |
 | `--concurrency N` | `5` | Concurrent per-source distillation calls. |

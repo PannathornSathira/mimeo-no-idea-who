@@ -77,7 +77,7 @@ async def run_pipeline(
     if parallel is None:
         parallel = ParallelClient()
     if llm is None:
-        llm = LLMClient(model=settings.model)
+        llm = LLMClient(model=settings.model, provider=settings.provider)
 
     # Stage 0: disambiguate the name before spending money on discovery.
     # Cheap (one search + one LLM call) and short-circuits with an error
@@ -190,54 +190,112 @@ async def run_pipeline(
     written: list[str] = []
 
     if write_skill_flag:
-        stage(
-            f"{authoring_index}/{total_stages} Author skill",
-            "Writing SKILL.md and references/*.md...",
-        )
-        authoring_index += 1
-        skill_output = await author_skill(corpus=corpus, settings=settings, llm=llm)
-        skill_path = write_skill(
-            output=skill_output, sources=sources, settings=settings
-        )
-        written.append(f"SKILL.md + references/ at [bold green]{skill_path}[/bold green]")
-
-        if settings.critique:
+        attempt = 1
+        max_attempts = 3
+        feedback = None
+        skill_output = None
+        skill_path = None
+        
+        while attempt <= max_attempts:
             stage(
-                f"{authoring_index}/{total_stages} Critique skill",
+                f"{authoring_index}/{total_stages} Author skill" + (f" (Attempt {attempt}/{max_attempts})" if settings.critique else ""),
+                "Writing SKILL.md and references/*.md..." if attempt == 1 else f"Re-authoring SKILL.md based on critique feedback (Attempt {attempt}/{max_attempts})...",
+            )
+            skill_output = await author_skill(
+                corpus=corpus, settings=settings, llm=llm, feedback=feedback
+            )
+            skill_path = write_skill(
+                output=skill_output, sources=sources, settings=settings
+            )
+            
+            if not settings.critique:
+                break
+                
+            stage(
+                f"{authoring_index + 1}/{total_stages} Critique skill (Attempt {attempt}/{max_attempts})",
                 "Adversarial review of the authored skill...",
             )
-            authoring_index += 1
             report = await critique_skill(
-                output=skill_output, corpus=corpus, settings=settings, llm=llm
+                output=skill_output, corpus=corpus, settings=settings, llm=llm, write_report=True
             )
-            console.print(
-                _critique_summary(report, label="SKILL.md")
+            console.print(_critique_summary(report, label="SKILL.md"))
+            
+            if report.overall_score >= 8:
+                console.print(f"[bold green]SKILL.md passed critique with score {report.overall_score}/10![/bold green]")
+                break
+                
+            if attempt == max_attempts:
+                console.print(f"[bold yellow]SKILL.md critique score ({report.overall_score}/10) is below threshold, but maximum retries reached.[/bold yellow]")
+                break
+                
+            issues_text = []
+            for idx, issue in enumerate(report.issues, 1):
+                suggestion_str = f" Suggestion: {issue.suggestion}" if issue.suggestion else ""
+                issues_text.append(f"{idx}. [{issue.severity.upper()}] in {issue.location}: {issue.description}{suggestion_str}")
+            
+            feedback = (
+                f"Overall Score: {report.overall_score}/10\n"
+                f"Summary of issues:\n" + "\n".join(issues_text)
             )
+            console.print(f"[bold yellow]SKILL.md score is low ({report.overall_score}/10). Initiating automated rewrite loop...[/bold yellow]")
+            attempt += 1
+
+        written.append(f"SKILL.md + references/ at [bold green]{skill_path}[/bold green]")
+        authoring_index += 2 if settings.critique else 1
 
     if write_agents_flag:
-        stage(
-            f"{authoring_index}/{total_stages} Author AGENTS.md",
-            "Writing AGENTS.md...",
-        )
-        authoring_index += 1
-        agents_output = await author_agents(corpus=corpus, settings=settings, llm=llm)
-        agents_path = write_agents(
-            output=agents_output, sources=sources, settings=settings
-        )
-        written.append(f"AGENTS.md at [bold green]{agents_path}[/bold green]")
-
-        if settings.critique:
+        attempt = 1
+        max_attempts = 3
+        feedback = None
+        agents_output = None
+        agents_path = None
+        
+        while attempt <= max_attempts:
             stage(
-                f"{authoring_index}/{total_stages} Critique AGENTS.md",
+                f"{authoring_index}/{total_stages} Author AGENTS.md" + (f" (Attempt {attempt}/{max_attempts})" if settings.critique else ""),
+                "Writing AGENTS.md..." if attempt == 1 else f"Re-authoring AGENTS.md based on critique feedback (Attempt {attempt}/{max_attempts})...",
+            )
+            agents_output = await author_agents(
+                corpus=corpus, settings=settings, llm=llm, feedback=feedback
+            )
+            agents_path = write_agents(
+                output=agents_output, sources=sources, settings=settings
+            )
+            
+            if not settings.critique:
+                break
+                
+            stage(
+                f"{authoring_index + 1}/{total_stages} Critique AGENTS.md (Attempt {attempt}/{max_attempts})",
                 "Adversarial review of the authored AGENTS.md...",
             )
-            authoring_index += 1
             report = await critique_agents(
-                output=agents_output, corpus=corpus, settings=settings, llm=llm
+                output=agents_output, corpus=corpus, settings=settings, llm=llm, write_report=True
             )
-            console.print(
-                _critique_summary(report, label="AGENTS.md")
+            console.print(_critique_summary(report, label="AGENTS.md"))
+            
+            if report.overall_score >= 8:
+                console.print(f"[bold green]AGENTS.md passed critique with score {report.overall_score}/10![/bold green]")
+                break
+                
+            if attempt == max_attempts:
+                console.print(f"[bold yellow]AGENTS.md critique score ({report.overall_score}/10) is below threshold, but maximum retries reached.[/bold yellow]")
+                break
+                
+            issues_text = []
+            for idx, issue in enumerate(report.issues, 1):
+                suggestion_str = f" Suggestion: {issue.suggestion}" if issue.suggestion else ""
+                issues_text.append(f"{idx}. [{issue.severity.upper()}] in {issue.location}: {issue.description}{suggestion_str}")
+            
+            feedback = (
+                f"Overall Score: {report.overall_score}/10\n"
+                f"Summary of issues:\n" + "\n".join(issues_text)
             )
+            console.print(f"[bold yellow]AGENTS.md score is low ({report.overall_score}/10). Initiating automated rewrite loop...[/bold yellow]")
+            attempt += 1
+
+        written.append(f"AGENTS.md at [bold green]{agents_path}[/bold green]")
+        authoring_index += 2 if settings.critique else 1
 
     if settings.generate_avatar:
         console.rule("[bold cyan]Avatar")
@@ -256,9 +314,18 @@ async def run_pipeline(
                 console.print(f"Avatar saved to [bold green]{avatar_path}[/bold green]")
                 written.append(f"avatar at [bold green]{avatar_path}[/bold green]")
             else:
-                console.print(
-                    "[yellow]Avatar model returned no image; skipping.[/yellow]"
-                )
+                prompt_path = settings.skill_dir / "avatar_prompt.txt"
+                if prompt_path.exists():
+                    console.print(
+                        f"[yellow]Automated avatar skipped/failed. "
+                        f"Image generation prompt written to [bold]{prompt_path}[/bold] "
+                        "for external use.[/yellow]"
+                    )
+                    written.append(f"avatar prompt at [bold green]{prompt_path}[/bold green]")
+                else:
+                    console.print(
+                        "[yellow]Avatar model returned no image; skipping.[/yellow]"
+                    )
 
     console.print(
         Panel(

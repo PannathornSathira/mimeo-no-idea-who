@@ -294,12 +294,26 @@ async def test_pipeline_critique_low_score_is_surfaced(tmp_path: Path) -> None:
     for i in range(6):
         llm.queue_structured(Extraction, sample_extraction(f"src_{i:03d}"))
     llm.queue_structured(ClusteredCorpus, sample_clustered_corpus(s.expert_name))
+    
+    # Attempt 1
     llm.queue_structured(SkillOutput, sample_skill_output())
-    # Score of 4 exercises the "red" branch of _critique_summary.
     llm.queue_structured(
         CritiqueReport,
         CritiqueReport(overall_score=4, summary="Needs rework.", issues=[]),
     )
+    # Attempt 2
+    llm.queue_structured(SkillOutput, sample_skill_output())
+    llm.queue_structured(
+        CritiqueReport,
+        CritiqueReport(overall_score=5, summary="Still needs rework.", issues=[]),
+    )
+    # Attempt 3
+    llm.queue_structured(SkillOutput, sample_skill_output())
+    llm.queue_structured(
+        CritiqueReport,
+        CritiqueReport(overall_score=4, summary="Final try.", issues=[]),
+    )
+    
     out = await run_pipeline(s, parallel=parallel, llm=llm)
     assert (out / "SKILL.md").exists()
 
@@ -318,11 +332,20 @@ async def test_pipeline_critique_low_score_is_surfaced(tmp_path: Path) -> None:
     for i in range(6):
         llm2.queue_structured(Extraction, sample_extraction(f"src_{i:03d}"))
     llm2.queue_structured(ClusteredCorpus, sample_clustered_corpus(s2.expert_name))
+    
+    # Attempt 1
     llm2.queue_structured(SkillOutput, sample_skill_output())
     llm2.queue_structured(
         CritiqueReport,
         CritiqueReport(overall_score=6, summary="OK.", issues=[]),
     )
+    # Attempt 2
+    llm2.queue_structured(SkillOutput, sample_skill_output())
+    llm2.queue_structured(
+        CritiqueReport,
+        CritiqueReport(overall_score=9, summary="Perfect.", issues=[]),
+    )
+    
     await run_pipeline(s2, parallel=parallel2, llm=llm2)
 
 
@@ -561,7 +584,7 @@ async def test_pipeline_constructs_default_clients_when_omitted(
         construct_log.append("parallel")
         self._client = None
 
-    def _fake_llm_init(self, model: str = "x"):  # type: ignore[no-redef]
+    def _fake_llm_init(self, model: str = "x", provider: str = "auto"):  # type: ignore[no-redef]
         construct_log.append("llm")
         self.model = model
         self._client = None

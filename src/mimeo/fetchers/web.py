@@ -73,15 +73,26 @@ async def fetch_web(source: Source, parallel: ParallelClient) -> FetchedContent:
         logger.warning("trafilatura fetch failed for %s: %s", source.url, exc)
         text = None
 
+    # Try Jina Reader API if trafilatura failed or got too little text
+    fetch_method = "trafilatura"
+    if not text or len(text) < _MIN_CHARS // 2:
+        logger.info("Local scraper returned insufficient content; trying Jina Reader API for %s", source.url)
+        jina_text = await _jina_fetch(source.url)
+        if jina_text and len(jina_text) > (len(text) if text else 0):
+            text = jina_text
+            fetch_method = "jina-reader"
+
     if not text:
         text = joined_excerpts  # whatever we had, even if short
+        fetch_method = "parallel-excerpt"
+
     return FetchedContent(
         source_id=source.id,
         url=source.url,
         title=source.title,
         text=text[:_TARGET_CHARS],
         char_count=min(len(text), _TARGET_CHARS),
-        fetch_method="trafilatura" if text and text != joined_excerpts else "parallel-excerpt",
+        fetch_method=fetch_method,
     )
 
 
@@ -95,3 +106,15 @@ def _trafilatura_fetch(url: str) -> str | None:
         include_tables=True,
         favor_recall=True,
     )
+
+
+async def _jina_fetch(url: str) -> str | None:
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.get(f"https://r.jina.ai/{url}", headers={"Accept": "text/plain"})
+            if resp.status_code == 200:
+                return resp.text
+    except Exception as e:
+        logger.warning("Jina Reader API failed for %s: %s", url, e)
+    return None

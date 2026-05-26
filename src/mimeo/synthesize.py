@@ -244,9 +244,10 @@ async def author_skill(
     corpus: ClusteredCorpus,
     settings: Settings,
     llm: LLMClient,
+    feedback: str | None = None,
 ) -> SkillOutput:
     cache_path = settings.workspace_dir / f"skill_output.{settings.model_cache_id}.json"
-    if cache_path.exists() and not settings.refresh:
+    if cache_path.exists() and not settings.refresh and not feedback:
         try:
             return SkillOutput.model_validate_json(cache_path.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
@@ -260,6 +261,14 @@ async def author_skill(
         expert_context=settings.expert_context,
         corpus_json=_maybe_truncate(corpus_json, 80_000),
     )
+    if feedback:
+        prompt += (
+            f"\n\n### Feedback from Previous Critique:\n"
+            f"Please revise your previous draft based on the following critique feedback:\n"
+            f"{feedback}\n\n"
+            f"Ensure you address all issues and suggestions listed above while maintaining "
+            f"the required structure and strict adherence to verbatim quotes."
+        )
 
     system = (
         "You write Agent Skills that make an AI assistant reason in the style "
@@ -284,10 +293,11 @@ async def author_agents(
     corpus: ClusteredCorpus,
     settings: Settings,
     llm: LLMClient,
+    feedback: str | None = None,
 ) -> AgentsOutput:
     """Author a standalone AGENTS.md (no references, no frontmatter)."""
     cache_path = settings.workspace_dir / f"agents_output.{settings.model_cache_id}.json"
-    if cache_path.exists() and not settings.refresh:
+    if cache_path.exists() and not settings.refresh and not feedback:
         try:
             return AgentsOutput.model_validate_json(cache_path.read_text(encoding="utf-8"))
         except Exception:  # noqa: BLE001
@@ -301,6 +311,14 @@ async def author_agents(
         expert_context=settings.expert_context,
         corpus_json=_maybe_truncate(corpus_json, 80_000),
     )
+    if feedback:
+        prompt += (
+            f"\n\n### Feedback from Previous Critique:\n"
+            f"Please revise your previous draft based on the following critique feedback:\n"
+            f"{feedback}\n\n"
+            f"Ensure you address all issues and suggestions listed above while maintaining "
+            f"the required structure and strict adherence to verbatim quotes."
+        )
 
     system = (
         "You write AGENTS.md files that install an expert's reasoning as an "

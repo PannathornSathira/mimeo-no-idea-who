@@ -43,14 +43,70 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class LLMClient:
-    """Thin wrapper around ``AsyncOpenAI`` pointed at OpenRouter."""
+    """Thin wrapper around ``AsyncOpenAI`` pointed at the selected provider."""
 
-    def __init__(self, model: str = DEFAULT_MODEL) -> None:
+    def __init__(self, model: str = DEFAULT_MODEL, provider: str = "auto") -> None:
+        import os
+        from .config import MissingCredentialError
+
+        provider_lower = provider.lower() if provider else "auto"
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        openai_key = os.environ.get("OPENAI_API_KEY")
+        openrouter_key = os.environ.get("OPENROUTER_API_KEY")
+
+        if provider_lower == "auto":
+            if gemini_key:
+                provider_lower = "gemini"
+            elif openai_key:
+                provider_lower = "openai"
+            elif openrouter_key:
+                provider_lower = "openrouter"
+            elif model.startswith("gemini-"):
+                provider_lower = "gemini"
+            elif model.startswith("gpt-"):
+                provider_lower = "openai"
+            else:
+                provider_lower = "openrouter"
+
+        self.provider = provider_lower
+
+        if provider_lower == "gemini":
+            api_key = gemini_key or openrouter_key
+            if not api_key:
+                raise MissingCredentialError(
+                    "GEMINI_API_KEY is not set. Get a free key from Google AI Studio."
+                )
+            base_url = os.environ.get("MIMEO_GEMINI_BASE_URL") or "https://generativelanguage.googleapis.com/v1beta/openai/"
+            headers = {}
+            if model == DEFAULT_MODEL:
+                model = "gemini-2.5-flash"
+        elif provider_lower == "openai":
+            api_key = openai_key
+            if not api_key:
+                raise MissingCredentialError(
+                    "OPENAI_API_KEY is not set. Please set it in your .env file."
+                )
+            base_url = os.environ.get("MIMEO_OPENAI_BASE_URL") or "https://api.openai.com/v1"
+            headers = {}
+            if model == DEFAULT_MODEL:
+                model = "gpt-4o-mini"
+        elif provider_lower == "ollama":
+            api_key = "ollama"
+            base_url = os.environ.get("MIMEO_OLLAMA_BASE_URL") or "http://localhost:11434/v1"
+            headers = {}
+            if model == DEFAULT_MODEL:
+                model = "llama3"
+        else:
+            # Default to OpenRouter
+            api_key = require_openrouter_key()
+            base_url = OPENROUTER_BASE_URL
+            headers = openrouter_default_headers() or {}
+
         self.model = model
         self._client = AsyncOpenAI(
-            api_key=require_openrouter_key(),
-            base_url=OPENROUTER_BASE_URL,
-            default_headers=openrouter_default_headers() or None,
+            api_key=api_key,
+            base_url=base_url,
+            default_headers=headers or None,
         )
 
     async def complete(

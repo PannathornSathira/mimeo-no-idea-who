@@ -91,11 +91,24 @@ async def generate_avatar(
 ) -> Path | None:
     """Generate the expert avatar and write it to ``<skill>/avatar.<ext>``.
 
-    Returns the path on success, or ``None`` if the model declined to
-    produce an image. Raises :class:`httpx.HTTPError` on transport errors
-    so callers can log and continue; the pipeline wrapper catches these.
+    If generating via API is unavailable (no key or error), writes the
+    optimized image prompt to ``<skill>/avatar_prompt.txt`` for manual use.
     """
+    import os
     prompt = _build_prompt(settings)
+
+    # Pre-emptively ensure skill directory exists and write prompt to file
+    settings.skill_dir.mkdir(parents=True, exist_ok=True)
+    prompt_path = settings.skill_dir / "avatar_prompt.txt"
+    prompt_path.write_text(prompt, encoding="utf-8")
+
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        logger.info(
+            "Skipped automated avatar generation (OPENROUTER_API_KEY not set). "
+            "Exposed optimized image prompt in %s", prompt_path
+        )
+        return None
+
     headers = {
         "Authorization": f"Bearer {require_openrouter_key()}",
         "Content-Type": "application/json",
@@ -130,7 +143,6 @@ async def generate_avatar(
         return None
 
     image_bytes, ext = extracted
-    settings.skill_dir.mkdir(parents=True, exist_ok=True)
     avatar_path = settings.skill_dir / f"avatar.{ext}"
     avatar_path.write_bytes(image_bytes)
     logger.info("Avatar written to %s (%d bytes).", avatar_path, len(image_bytes))

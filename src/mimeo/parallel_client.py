@@ -60,10 +60,28 @@ def _retryer(attempts: int = 4) -> AsyncRetrying:
 
 
 class ParallelClient:
-    """Facade that keeps a single ``AsyncParallel`` under the hood."""
+    """Facade that keeps a single ``AsyncParallel`` or uses Tavily/DDG fallbacks."""
 
     def __init__(self) -> None:
-        self._client = AsyncParallel(api_key=require_parallel_key())
+        import os
+        provider = os.environ.get("MIMEO_SEARCH_PROVIDER", "").lower()
+        parallel_key = os.environ.get("PARALLEL_API_KEY")
+        tavily_key = os.environ.get("TAVILY_API_KEY")
+
+        if not provider:
+            if parallel_key:
+                provider = "parallel"
+            elif tavily_key:
+                provider = "tavily"
+            else:
+                provider = "duckduckgo"
+
+        self.provider = provider
+
+        if provider == "parallel":
+            self._client = AsyncParallel(api_key=require_parallel_key())
+        else:
+            self._client = None
 
     async def search(
         self,
@@ -73,21 +91,26 @@ class ParallelClient:
         max_chars_total: int = 30_000,
         mode: str = "advanced",
     ) -> SearchResult:
-        """Run one Search API call.
+        """Run one Search API call or fallback.
 
         ``objective`` is a natural-language description of what we want.
         ``search_queries`` are optional targeted keyword queries.
         """
         queries = search_queries or [objective]
-        async for attempt in _retryer():
-            with attempt:
-                return await self._client.search(
-                    objective=objective,
-                    search_queries=queries,
-                    max_chars_total=max_chars_total,
-                    mode=mode,  # type: ignore[arg-type]
-                )
-        raise RuntimeError("unreachable")  # pragma: no cover - tenacity reraises
+        if self.provider == "parallel" and self._client:
+            async for attempt in _retryer():
+                with attempt:
+                    return await self._client.search(
+                        objective=objective,
+                        search_queries=queries,
+                        max_chars_total=max_chars_total,
+                        mode=mode,  # type: ignore[arg-type]
+                    )
+            raise RuntimeError("unreachable")  # pragma: no cover - tenacity reraises
+        elif self.provider == "tavily":
+            return await self._tavily_search(queries)
+        else:
+            return await self._ddg_search(queries)
 
     async def extract(
         self,
@@ -96,15 +119,26 @@ class ParallelClient:
         objective: str | None = None,
         max_chars_total: int = 20_000,
     ) -> ExtractResponse:
-        """Get LLM-optimized full content for specific URLs."""
-        async for attempt in _retryer():
-            with attempt:
-                return await self._client.extract(
-                    urls=urls,
-                    objective=objective,
-                    max_chars_total=max_chars_total,
-                )
-        raise RuntimeError("unreachable")  # pragma: no cover - tenacity reraises
+        """Get LLM-optimized full content or fallback."""
+        if self.provider == "parallel" and self._client:
+            async for attempt in _retryer():
+                with attempt:
+                    return await self._client.extract(
+                        urls=urls,
+                        objective=objective,
+                        max_chars_total=max_chars_total,
+                    )
+            raise RuntimeError("unreachable")  # pragma: no cover - tenacity reraises
+        else:
+            # Fall back to Trafilatura/Jina by returning empty results list
+            return ExtractResponse(
+                results=[],
+                errors=[],
+                extract_id="fallback_extract",
+                session_id="fallback_session",
+                usage=None,
+                warnings=None,
+            )
 
     async def deep_research(
         self,
@@ -115,14 +149,14 @@ class ParallelClient:
         poll_interval_s: float = 10.0,
         max_wait_s: float = 60 * 25,
     ) -> TaskRunResult:
-        """Create a Task API run and poll until it completes.
+        """Create a Task API run and poll until it completes."""
+        if self.provider != "parallel" or not self._client:
+            from .config import MissingCredentialError
+            raise MissingCredentialError(
+                "Deep research is a paid feature that requires a PARALLEL_API_KEY. "
+                "Please run without the --deep-research flag to use the free search mode."
+            )
 
-        Processors (from Parallel docs):
-
-        * ``pro-fast`` — 30s-5min, good default
-        * ``ultra-fast`` — 1-10min, deeper
-        * ``ultra`` — 5-25min, maximum depth
-        """
         # Cast metadata values to str|int|float|bool only (the SDK restricts).
         safe_metadata: dict[str, str | float | bool] | None = None
         if metadata:
@@ -162,3 +196,114 @@ class ParallelClient:
                     f"Parallel deep-research run {run_id} exceeded {max_wait_s:.0f}s deadline"
                 )
             await asyncio.sleep(poll_interval_s)
+
+    async def _tavily_search(self, queries: list[str]) -> SearchResult:
+        import httpx
+        import os
+        from parallel.types import SearchResult, WebSearchResult
+        
+        api_key = os.environ.get("TAVILY_API_KEY")
+        if not api_key:
+            from .config import MissingCredentialError
+            raise MissingCredentialError("TAVILY_API_KEY is not set. Please set it in your .env file.")
+            
+        seen_urls = set()
+        results = []
+        
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            tasks = [
+                client.post(
+                    "https://api.tavily.com/search",
+                    json={
+                        "api_key": api_key,
+                        "query": query,
+                        "max_results": 10
+                    }
+                )
+                for query in queries[:3]
+            ]
+            responses = await asyncio.gather(*tasks, return_exceptions=True)
+            for resp in responses:
+                if isinstance(resp, Exception):
+                    logger.warning("Tavily query failed: %s", resp)
+                    continue
+                if resp.status_code != 200:
+                    logger.warning("Tavily query failed with status %d: %s", resp.status_code, resp.text)
+                    continue
+                try:
+                    data = resp.json()
+                    for r in data.get("results") or []:
+                        url = r.get("url")
+                        if not url or url in seen_urls:
+                            continue
+                        seen_urls.add(url)
+                        excerpts = [r.get("content")] if r.get("content") else []
+                        results.append(
+                            WebSearchResult(
+                                url=url,
+                                title=r.get("title", ""),
+                                publish_date=None,
+                                excerpts=excerpts
+                            )
+                        )
+                except Exception as e:
+                    logger.warning("Failed to parse Tavily response: %s", e)
+                    
+        return SearchResult(
+            results=results,
+            search_id="tavily_search",
+            session_id="tavily_session",
+            usage=None,
+            warnings=None
+        )
+
+    async def _ddg_search(self, queries: list[str]) -> SearchResult:
+        from parallel.types import SearchResult, WebSearchResult
+        
+        tasks = [
+            asyncio.to_thread(self._run_ddg, q)
+            for q in queries[:3]
+        ]
+        results_lists = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        seen_urls = set()
+        results = []
+        
+        for res_list in results_lists:
+            if isinstance(res_list, Exception):
+                logger.warning("DuckDuckGo search failed: %s", res_list)
+                continue
+            for r in res_list:
+                url = r.get("href")
+                if not url or url in seen_urls:
+                    continue
+                seen_urls.add(url)
+                
+                body = r.get("body", "")
+                excerpts = [body] if body else []
+                results.append(
+                    WebSearchResult(
+                        url=url,
+                        title=r.get("title", ""),
+                        publish_date=None,
+                        excerpts=excerpts
+                    )
+                )
+                
+        return SearchResult(
+            results=results,
+            search_id="ddg_search",
+            session_id="ddg_session",
+            usage=None,
+            warnings=None
+        )
+
+    def _run_ddg(self, query: str) -> list[dict[str, str]]:
+        try:
+            from duckduckgo_search import DDGS
+            with DDGS() as ddgs:
+                results = ddgs.text(query, max_results=10)
+                return list(results) if results else []
+        except Exception as e:
+            logger.warning("DuckDuckGo search exception for query '%s': %s", query, e)
+            return []

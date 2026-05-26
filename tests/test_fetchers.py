@@ -112,7 +112,11 @@ async def test_fetch_web_trafilatura_timeout_falls_back_to_excerpts(
         coro.close()
         raise asyncio.TimeoutError()
 
+    async def _fake_jina(url: str) -> None:
+        return None
+
     monkeypatch.setattr(asyncio, "wait_for", _slow_wait_for)
+    monkeypatch.setattr("mimeo.fetchers.web._jina_fetch", _fake_jina)
     out = await fetch_web(src, parallel)
     # We get *something* (the excerpt), method degrades to parallel-excerpt label.
     assert out.text == "short"
@@ -128,6 +132,11 @@ async def test_fetch_web_trafilatura_exception_falls_back(
         "mimeo.fetchers.web._trafilatura_fetch",
         lambda url: (_ for _ in ()).throw(RuntimeError("net down")),
     )
+    
+    async def _fake_jina(url: str) -> None:
+        return None
+        
+    monkeypatch.setattr("mimeo.fetchers.web._jina_fetch", _fake_jina)
     out = await fetch_web(src, parallel)
     assert out.text == "x"
 

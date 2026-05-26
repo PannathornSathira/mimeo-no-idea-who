@@ -36,6 +36,7 @@ class Settings:
     max_sources: int = 25
     deep_research: bool = False
     model: str = DEFAULT_MODEL
+    provider: str = "auto"
     concurrency: int = 5
     refresh: bool = False
     # Optional short qualifier that disambiguates which real person we mean.

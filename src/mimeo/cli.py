@@ -77,8 +77,17 @@ def build(
     ] = False,
     model: Annotated[
         str,
-        typer.Option("--model", help="Any OpenRouter model slug."),
+        typer.Option("--model", help="LLM model slug (e.g. google/gemini-3.1-pro-preview, gemini-2.5-flash, gpt-4o-mini, llama3)."),
     ] = DEFAULT_MODEL,
+    provider: Annotated[
+        str,
+        typer.Option(
+            "--provider",
+            "-p",
+            help="LLM provider: auto (auto-detect based on env keys), openrouter, gemini (Google AI Studio), openai, ollama.",
+            case_sensitive=False,
+        ),
+    ] = "auto",
     output_dir: Annotated[
         Path,
         typer.Option("--output-dir", help="Where the generated skill directory lands."),
@@ -172,6 +181,7 @@ def build(
         max_sources=max_sources,
         deep_research=deep_research,
         model=model,
+        provider=provider,
         concurrency=concurrency,
         refresh=refresh,
         expert_description=disambiguator,

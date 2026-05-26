@@ -186,6 +186,46 @@ async def test_author_agents_recovers_from_corrupt_cache(settings: Settings) -> 
     assert "Think like Test Expert" in out.content
 
 
+@pytest.mark.asyncio
+async def test_author_skill_with_feedback_bypasses_cache(settings: Settings) -> None:
+    ensure_dirs(settings)
+    cache = settings.workspace_dir / f"skill_output.{settings.model_cache_id}.json"
+    cache.write_text(sample_skill_output().model_dump_json(), encoding="utf-8")
+    llm = FakeLLMClient()
+    llm.queue_structured(SkillOutput, sample_skill_output())
+    out = await author_skill(
+        corpus=sample_clustered_corpus(),
+        settings=settings,
+        llm=llm,
+        feedback="Revise voice style",
+    )
+    assert out.skill_name == "test-expert"
+    # Ensure FakeLLMClient WAS called (cache bypassed)
+    assert len(llm.structured_calls) == 1
+    # Ensure feedback was appended to the prompt
+    assert "Revise voice style" in llm.structured_calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_author_agents_with_feedback_bypasses_cache(settings: Settings) -> None:
+    ensure_dirs(settings)
+    cache = settings.workspace_dir / f"agents_output.{settings.model_cache_id}.json"
+    cache.write_text(sample_agents_output().model_dump_json(), encoding="utf-8")
+    llm = FakeLLMClient()
+    llm.queue_structured(AgentsOutput, sample_agents_output())
+    out = await author_agents(
+        corpus=sample_clustered_corpus(),
+        settings=settings,
+        llm=llm,
+        feedback="Improve quotes formatting",
+    )
+    assert "Think like Test Expert" in out.content
+    # Ensure FakeLLMClient WAS called (cache bypassed)
+    assert len(llm.structured_calls) == 1
+    # Ensure feedback was appended to the prompt
+    assert "Improve quotes formatting" in llm.structured_calls[0][1]
+
+
 # ---------------------------------------------------------------------------
 # Batched clustering
 # ---------------------------------------------------------------------------
